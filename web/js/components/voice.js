@@ -1,6 +1,8 @@
-// Speech-to-text dictation for the message input. iOS only — uses the native
-// plugin:speech (SFSpeechRecognizer). The browser Web Speech API performs poorly,
-// so the mic is hidden everywhere except the iOS app.
+// Speech-to-text dictation for the message input. The iOS app uses the native
+// plugin:speech (SFSpeechRecognizer) and keeps its mic in every Session. Elsewhere
+// (Android app, browsers) the mic appears only in voice mode (voice-mode.js) and
+// streams to Amazon Transcribe (voice-stream.js): hold to talk, or tap to start/stop.
+// Both feed the same cumulative-transcript insertion model below.
 //
 // Native contract (SpeechPlugin.swift): each recognition session emits CUMULATIVE
 // text per event { text, isFinal }. iOS auto-ends the task on isFinal, so to keep
@@ -24,8 +26,13 @@
 //                 ignore events once it's stale (after stop / isFinal re-arm).
 //   stickyMic   - once dictation starts, mic stays available through any keyboard
 //                 editing; resets only when the field is cleared.
+import { showToast } from './toast.js';
+import {
+  captureMicrophone, decodeEvent, encodeAudioEvent, transcribeLanguage, transcriptCollector,
+} from './voice-stream.js';
+
 (function () {
-  var supported = null;   // resolved lazily: iOS app only
+  var supported = null;   // native iOS speech; resolved lazily
   var recording = false;
   var stickyMic = false;
   var anchor = 0;
@@ -46,14 +53,26 @@
   // Mic shows when: actively recording, dictation already started this draft (sticky),
   // or the field is empty. Manual typing into an empty field hides it (send takes over);
   // clearing the field brings it back.
+  function canStream() {
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.WebSocket
+      && (window.AudioContext || window.webkitAudioContext));
+  }
+  function native() {
+    if (supported === null) supported = detect();
+    return supported;
+  }
+  function available() {
+    return native() || (canStream() && !!(window.voiceModeActive && window.voiceModeActive()));
+  }
+
   window.updateMicButton = function () {
     var btn = document.getElementById('mic-btn');
     if (!btn) return;
     if (!recording && !input().value.trim()) stickyMic = false;
-    btn.style.display = (supported && (recording || stickyMic || !input().value.trim())) ? 'flex' : 'none';
+    btn.style.display = (available() && (recording || stickyMic || !input().value.trim())) ? 'flex' : 'none';
   };
   window.initVoiceButton = function () {
-    if (supported === null) supported = detect();
+    bindStreamingMic();
     window.updateMicButton();
   };
 
@@ -167,12 +186,168 @@
     if (core) core.invoke('plugin:speech|stop_recognition').catch(noop);
   }
 
+  // ---------- streaming dictation (Android app, browsers) ----------
+
+  var HOLD_MS = 400;
+  var MAX_MS = 3 * 60 * 1000;
+  var live = null;        // current streaming session
+  var pressAt = null;  // pointerdown time of a press that started dictation
+
+  function beginInsertion(focus) {
+    var el = input();
+    if (focus) el.focus();
+    anchor = (document.activeElement === el) ? el.selectionStart : el.value.length;
+    base = 0;
+    interimLen = 0;
+    lastRecoLen = 0;
+    lastValue = el.value;
+    stickyMic = true;
+  }
+
+  function commitInsertion() {
+    anchor += interimLen;
+    interimLen = 0;
+    base = 0;
+    lastRecoLen = 0;
+  }
+
+  function startStream() {
+    var AudioCtx = window.AudioContext || window.webkitAudioContext;
+    var session = { id: ++gen, context: null, stream: null, socket: null, flush: null,
+      collector: transcriptCollector(), closing: false, autoSend: false, timer: 0 };
+    live = session;
+    beginInsertion(false);
+    setRecording(true);
+    var placeholder = input().placeholder;
+    session.restorePlaceholder = function () { input().placeholder = placeholder; };
+    input().placeholder = 'Listening…';
+    try { session.context = new AudioCtx(); } catch (e) { failStream(session, 'Microphone is not available'); return; }
+    var language = transcribeLanguage(lang());
+    Promise.all([
+      navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }),
+      window.apiPost('/api/voice/stt-url', { language: language }),
+    ]).then(function (results) {
+      session.stream = results[0];
+      if (live !== session || session.closing) { releaseAudio(session); return; }
+      openSocket(session, results[1].url);
+    }, function (error) {
+      var denied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
+      failStream(session, denied ? 'Microphone permission is off for Baton' : 'Could not start voice input');
+    });
+    session.timer = setTimeout(function () { stopStream(session, false); }, MAX_MS);
+  }
+
+  function openSocket(session, url) {
+    var socket = new WebSocket(url);
+    socket.binaryType = 'arraybuffer';
+    session.socket = socket;
+    socket.onopen = function () {
+      captureMicrophone(session.context, session.stream, function (chunk) {
+        if (socket.readyState === WebSocket.OPEN) socket.send(encodeAudioEvent(chunk));
+      }).then(function (flush) {
+        session.flush = flush;
+        if (session.closing) endAudio(session);
+      }, function () { failStream(session, 'Could not read the microphone'); });
+    };
+    socket.onmessage = function (event) {
+      var message;
+      try { message = decodeEvent(new Uint8Array(event.data)); } catch (e) { return; }
+      if (message.headers[':message-type'] !== 'event') {
+        console.warn('Transcribe:', message.headers[':exception-type'] || message.headers[':error-code'], message.body);
+        failStream(session, 'Voice input stopped');
+        return;
+      }
+      if (live !== session && !session.closing) return;
+      onResult(session.collector.apply(message.body), false);
+    };
+    socket.onerror = function () { if (!session.closing) failStream(session, 'Voice input connection failed'); };
+    socket.onclose = function () { finishStream(session); };
+  }
+
+  function releaseAudio(session) {
+    if (session.flush) { try { session.flush(); } catch (e) {} session.flush = null; }
+    if (session.stream) session.stream.getTracks().forEach(function (track) { track.stop(); });
+    if (session.context && session.context.state !== 'closed') session.context.close().catch(noop);
+  }
+
+  function endAudio(session) {
+    releaseAudio(session);
+    var socket = session.socket;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(encodeAudioEvent(new Uint8Array(0)));  // end of audio: Transcribe sends the last results, then closes
+      setTimeout(function () { if (socket.readyState !== WebSocket.CLOSED) socket.close(); }, 4000);
+    } else {
+      finishStream(session);
+    }
+  }
+
+  function stopStream(session, autoSend) {
+    if (!session || session.closing) return;
+    session.closing = true;
+    session.autoSend = !!autoSend;
+    clearTimeout(session.timer);
+    if (live === session) setRecording(false);
+    session.restorePlaceholder();
+    if (session.flush || !session.socket || session.socket.readyState !== WebSocket.CONNECTING) endAudio(session);
+  }
+
+  function finishStream(session) {
+    if (session.finished) return;
+    session.finished = true;
+    clearTimeout(session.timer);
+    releaseAudio(session);
+    if (live !== session) return;
+    live = null;
+    setRecording(false);
+    session.restorePlaceholder();
+    var text = session.collector.text();
+    if (text) onResult(text, false);
+    commitInsertion();
+    if (session.autoSend && text && window.voiceSettings && window.voiceSettings().autoSend
+        && typeof window.onSendBtnClick === 'function') {
+      setTimeout(window.onSendBtnClick, 0);
+    }
+  }
+
+  function failStream(session, message) {
+    if (session.finished) return;
+    session.closing = true;
+    if (session.socket && session.socket.readyState <= WebSocket.OPEN) session.socket.close();
+    finishStream(session);
+    if (message) showToast(message);
+  }
+
+  var micBound = false;
+  function bindStreamingMic() {
+    var btn = document.getElementById('mic-btn');
+    if (!btn || micBound) return;
+    micBound = true;
+    btn.addEventListener('contextmenu', function (event) { if (!native()) event.preventDefault(); });
+    btn.addEventListener('pointerdown', function (event) {
+      if (native() || event.button > 0) return;
+      event.preventDefault();  // keep focus (and the soft keyboard) where it is
+      if (live && !live.closing) { stopStream(live, true); pressAt = null; return; }
+      pressAt = Date.now();
+      startStream();
+    });
+    var release = function (cancelled) {
+      if (native() || pressAt === null) return;
+      var held = Date.now() - pressAt;
+      pressAt = null;
+      if (live && !live.closing && (cancelled || held >= HOLD_MS)) stopStream(live, !cancelled);
+    };
+    btn.addEventListener('pointerup', function () { release(false); });
+    btn.addEventListener('pointercancel', function () { release(true); });
+  }
+
   // Called by the send path so sending also ends dictation.
-  window.stopDictation = function () { if (recording) stop(); };
+  window.stopDictation = function () {
+    if (live) stopStream(live, false);
+    else if (recording) stop();
+  };
 
   window.toggleDictation = function () {
-    if (supported === null) supported = detect();
-    if (!supported) return;
+    if (!native()) return;  // streaming mic is driven by pointer events
     if (recording) stop(); else start();
   };
 })();

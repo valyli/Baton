@@ -525,7 +525,7 @@ function updateBreadcrumb() {
     titleHtml = '<span class="breadcrumb-sep">/</span><span class="breadcrumb-title">' + titleText + '</span>';
     if (state.appState.session !== '__new__') {
       titleMeta = '<div class="session-title-meta">' + sessionRuntimeControl() + agentMark
-        + sessionRenameButton() + '</div>';
+        + sessionRenameButton() + (window.voiceModeControl?.() || '') + '</div>';
     }
   }
   var titleSession = state.rootSessionId || state.appState.session || '';
