@@ -5,7 +5,8 @@ import { JSDOM } from 'jsdom';
 const dom = new JSDOM('<!doctype html><div class="messages"></div>'
   + '<div id="input-bar"><div class="input-row"><textarea id="msg-input"></textarea></div></div>'
   + '<div id="voiceSettings" hidden><input id="voiceAutoRead" type="checkbox"><input id="voiceBriefDefault" type="checkbox">'
-  + '<input id="voiceAutoSend" type="checkbox"><button data-brief-threshold="200"></button><button data-brief-threshold="500"></button></div>',
+  + '<input id="voiceAutoSend" type="checkbox"><button data-brief-threshold="200"></button><button data-brief-threshold="500"></button>'
+  + '<button data-voice-language="auto"></button><button data-voice-language="zh-CN"></button></div>',
 { url: 'https://baton.test/', pretendToBeVisual: true });
 const { window } = dom;
 let hidden = false;
@@ -172,4 +173,7 @@ test('Settings switches persist voice preferences', () => {
   assert.equal(voice.voiceSettings().autoSend, true);
   assert.equal(voice.voiceSettings().threshold, 500);
   assert.equal(root.querySelector('[data-brief-threshold="500"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(root.querySelector('[data-voice-language="auto"]').getAttribute('aria-pressed'), 'true');
+  root.querySelector('[data-voice-language="zh-CN"]').click();
+  assert.equal(voice.voiceSettings().language, 'zh-CN');
 });

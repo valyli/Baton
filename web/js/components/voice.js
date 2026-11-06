@@ -222,7 +222,8 @@ import {
     session.restorePlaceholder = function () { input().placeholder = placeholder; };
     input().placeholder = 'Listening…';
     try { session.context = new AudioCtx(); } catch (e) { failStream(session, 'Microphone is not available'); return; }
-    var language = transcribeLanguage(lang());
+    var chosen = window.voiceSettings && window.voiceSettings().language;
+    var language = chosen && chosen !== 'auto' ? chosen : transcribeLanguage(lang());
     Promise.all([
       navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }),
       window.apiPost('/api/voice/stt-url', { language: language }),

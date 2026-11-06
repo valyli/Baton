@@ -127,6 +127,16 @@ test('a quick tap keeps listening until the next tap, then can auto-send', async
   assert.deepEqual(sends, ['提交吧。']);
 });
 
+test('a chosen dictation language overrides the device locale', async () => {
+  reset();
+  settings = { autoSend: false, language: 'zh-CN' };
+  press('pointerdown');
+  await settle();
+  assert.deepEqual(posts[0].body, { language: 'zh-CN' });
+  press('pointerdown');
+  sockets[0].close();
+});
+
 test('microphone permission denial stops cleanly', async () => {
   reset();
   micError = Object.assign(new Error('denied'), { name: 'NotAllowedError' });

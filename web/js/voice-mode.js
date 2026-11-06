@@ -6,7 +6,7 @@ import { showToast } from './components/toast.js';
 
 const SETTINGS_KEY = 'baton-voice-settings';
 const SESSION_PREFIX = 'baton-voice:';
-const DEFAULTS = { autoRead: true, brief: true, threshold: 300, autoSend: false };
+const DEFAULTS = { autoRead: true, brief: true, threshold: 300, autoSend: false, language: 'auto' };
 export const BRIEF_THRESHOLDS = [200, 300, 500];
 
 function readJson(key) {
@@ -47,14 +47,14 @@ export function voiceModeActive() {
   return !!sessionId && sessionVoice(sessionId).on;
 }
 
-const HEADPHONES_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z"/></svg>';
+const HEADPHONES_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z"/></svg>';
 const PLAY_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
 const STOP_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>';
 
 export function voiceModeControl() {
   const on = voiceModeActive();
   const label = on ? 'Voice mode on: tap for text mode' : 'Text mode: tap for voice mode';
-  return '<button class="voice-mode-toggle' + (on ? ' on' : '') + '" type="button" aria-pressed="' + on + '"'
+  return '<button class="project-files-entry voice-mode-toggle' + (on ? ' on' : '') + '" type="button" aria-pressed="' + on + '"'
     + ' title="' + label + '" aria-label="' + label + '"'
     + ' onclick="event.stopPropagation();toggleVoiceMode()">' + HEADPHONES_SVG + '</button>';
 }
@@ -260,6 +260,13 @@ export function mountVoiceSettings(root = document.getElementById('voiceSettings
   bind('voiceAutoRead', 'autoRead');
   bind('voiceBriefDefault', 'brief');
   bind('voiceAutoSend', 'autoSend');
+  for (const button of root.querySelectorAll('[data-voice-language]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.voiceLanguage === settings.language));
+    button.addEventListener('click', () => {
+      saveVoiceSettings({ language: button.dataset.voiceLanguage });
+      for (const other of root.querySelectorAll('[data-voice-language]')) other.setAttribute('aria-pressed', String(other === button));
+    });
+  }
   for (const button of root.querySelectorAll('[data-brief-threshold]')) {
     const value = Number(button.dataset.briefThreshold);
     button.setAttribute('aria-pressed', String(value === settings.threshold));
