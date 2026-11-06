@@ -496,7 +496,7 @@ function updateBreadcrumb() {
     var voiceButton = state.appState.session && state.appState.session !== '__new__'
       ? (window.voiceModeControl?.() || '')
       : '';
-    topRight.innerHTML = runtimeMark + voiceButton + filesButton + gitButton + terminalButton
+    topRight.innerHTML = runtimeMark + filesButton + gitButton + terminalButton + voiceButton
       + '<button class="new-session-btn" onclick="startNewSession(\'' + esc(state.appState.project.hash) + '\')" title="New Session">' + _addSvg + '</button>';
   } else if (state.appState.device && !state.appState.project) {
     var homeFilesButton = '<button class="project-files-entry" type="button" onclick="openHomeFilesPage(this)"'
