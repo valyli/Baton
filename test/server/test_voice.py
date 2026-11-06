@@ -76,7 +76,8 @@ class FakeS3:
 
     def head_object(self, Bucket, Key):
         if Key not in self.objects:
-            raise ClientError({'Error': {'Code': '404'}}, 'HeadObject')
+            # The Lambda role has no s3:ListBucket, so S3 reports a missing object as 403.
+            raise ClientError({'Error': {'Code': '403'}}, 'HeadObject')
         return {'Metadata': self.objects[Key]}
 
     def put_object(self, **kwargs):

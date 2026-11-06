@@ -237,7 +237,8 @@ def _cached(key):
     try:
         head = _s3().head_object(Bucket=_bucket(), Key=key)
     except ClientError as error:
-        if error.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+        # Without s3:ListBucket a missing object answers 403, not 404.
+        if error.response.get("Error", {}).get("Code") in ("403", "404", "NoSuchKey", "NotFound", "Forbidden"):
             return None
         raise
     return head.get("Metadata", {})
