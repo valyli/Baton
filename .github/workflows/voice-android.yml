@@ -1,0 +1,73 @@
+# Fork-only (valyli/Baton): builds the side-by-side "Baton Voice" test APK from feat/voice.
+# Not part of the upstream pull request.
+name: Voice Android APK
+
+on:
+  push:
+    branches: [feat/voice]
+    paths:
+      - 'web/**'
+      - 'src-tauri/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - '.github/workflows/voice-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Baton Voice APK
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: ./.github/actions/android-build-setup
+        id: android
+      - uses: ./.github/actions/rust-build-cache
+        with:
+          platform: android
+          targets: aarch64-linux-android
+          sdk: android-36-ndk-${{ steps.android.outputs.ndk-version }}
+      - run: npm ci
+      - name: Restore signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "ANDROID_KEYSTORE_BASE64 is required" >&2; exit 1; }
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > src-tauri/gen/android/baton.keystore
+          test -s src-tauri/gen/android/baton.keystore
+      - name: Build APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ORG_GRADLE_PROJECT_batonAppIdSuffix: .voice
+          ORG_GRADLE_PROJECT_batonAppLabel: Baton Voice
+        run: npm run build:android -- --ci
+      - name: Stage APK
+        run: |
+          apk="$(find src-tauri/gen/android -path '*/release/*' -name '*.apk' -type f -print -quit)"
+          test -n "$apk" && test -s "$apk"
+          mkdir -p artifacts
+          cp "$apk" artifacts/BatonVoice.apk
+          sha256sum artifacts/BatonVoice.apk
+      - uses: actions/upload-artifact@v6
+        with:
+          name: BatonVoice-Android-${{ github.sha }}
+          path: artifacts/BatonVoice.apk
+          if-no-files-found: error
+          retention-days: 14
