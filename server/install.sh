@@ -189,6 +189,16 @@ aws s3 mb "s3://${S3_BUCKET}" --region "$REGION" >/dev/null 2>&1 || true
 
 aws s3api put-bucket-cors --bucket "$S3_BUCKET" --region "$REGION" --cors-configuration \
   '{"CORSRules":[{"AllowedOrigins":["*"],"AllowedMethods":["GET","PUT","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag","Content-Length","Content-Type"],"MaxAgeSeconds":3600}]}'
+# Spoken replies are a cache: expire voice/ after a day, keeping any other lifecycle rules.
+LIFECYCLE_CURRENT="$(aws s3api get-bucket-lifecycle-configuration --bucket "$S3_BUCKET" --region "$REGION" 2>/dev/null || echo '{}')"
+LIFECYCLE_NEXT="$(LIFECYCLE_CURRENT="$LIFECYCLE_CURRENT" node -e '
+  const current = JSON.parse(process.env.LIFECYCLE_CURRENT || "{}");
+  const rules = (current.Rules || []).filter(rule => rule.ID !== "baton-voice-expire");
+  rules.push({ ID: "baton-voice-expire", Status: "Enabled", Filter: { Prefix: "voice/" }, Expiration: { Days: 1 } });
+  process.stdout.write(JSON.stringify({ Rules: rules }));
+')"
+aws s3api put-bucket-lifecycle-configuration --bucket "$S3_BUCKET" --region "$REGION" \
+  --lifecycle-configuration "$LIFECYCLE_NEXT"
 UPLOAD_ACCELERATION=false
 if [ "${S3_UPLOAD_ACCELERATE:-true}" = "true" ]; then
   echo "Enabling S3 upload acceleration (AWS transfer acceleration charges may apply)..."

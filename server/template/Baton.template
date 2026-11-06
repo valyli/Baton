@@ -11,6 +11,11 @@
       "AllowedValues": ["true", "false"],
       "Description": "Use S3 Transfer Acceleration after it has been enabled on the uploads bucket"
     },
+    "VoiceBriefModelId": {
+      "Type": "String",
+      "Default": "global.anthropic.claude-haiku-5-5",
+      "Description": "Bedrock model or inference profile that condenses long replies into spoken briefs"
+    },
     "ContainerImageUri": {
       "Type": "String",
       "Description": "The ECR image URI for the Lambda function"
@@ -100,6 +105,19 @@
                     "s3:GetObject"
                   ],
                   "Resource": { "Fn::Sub": "arn:aws:s3:::${ImagesBucketName}/*" }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": ["polly:SynthesizeSpeech", "transcribe:StartStreamTranscriptionWebSocket"],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "bedrock:InvokeModel",
+                  "Resource": [
+                    { "Fn::Sub": "arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*" },
+                    "arn:aws:bedrock:*::foundation-model/*"
+                  ]
                 }
               ]
             }
@@ -125,7 +143,8 @@
             "PUSH_RELAY_URL": { "Ref": "PushRelayUrl" },
             "APP_VERSION": { "Ref": "AppVersion" },
             "API_KEY_NAME": { "Ref": "ApiKeyName" },
-            "ACCOUNT_ID": { "Ref": "AccountId" }
+            "ACCOUNT_ID": { "Ref": "AccountId" },
+            "VOICE_BRIEF_MODEL_ID": { "Ref": "VoiceBriefModelId" }
           }
         },
         "MemorySize": 1024,
