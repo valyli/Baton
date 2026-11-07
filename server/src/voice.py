@@ -63,23 +63,28 @@ def _bedrock():
 # ---------- speech-to-text ----------
 
 class SttUrlRequest(BaseModel):
-    language: str = Field(default="zh-CN", pattern=r"^[a-z]{2}-[A-Z]{2}$")
+    # "auto" lets Transcribe pick one of VOICE_AUTO_LANGUAGES per dictation.
+    language: str = Field(default="auto", pattern=r"^(auto|[a-z]{2}-[A-Z]{2})$")
     sampleRate: int = Field(default=16000, ge=8000, le=48000)
 
 
-def transcribe_url(language="zh-CN", sample_rate=16000, credentials=None, region=None):
+def transcribe_url(language="auto", sample_rate=16000, credentials=None, region=None):
     region = region or _region()
     host = f"transcribestreaming.{region}.amazonaws.com:8443"
     query = {
-        "language-code": language,
         "media-encoding": "pcm",
         "sample-rate": str(sample_rate),
         "enable-partial-results-stabilization": "true",
         "partial-results-stability": "medium",
     }
-    vocabulary = os.environ.get("VOICE_VOCABULARY_NAME", "")
-    if vocabulary:
-        query["vocabulary-name"] = vocabulary
+    if language == "auto":
+        query["identify-language"] = "true"
+        query["language-options"] = os.environ.get("VOICE_AUTO_LANGUAGES", "zh-CN,en-US")
+    else:
+        query["language-code"] = language
+        vocabulary = os.environ.get("VOICE_VOCABULARY_NAME", "")
+        if vocabulary:
+            query["vocabulary-name"] = vocabulary
     request = AWSRequest(method="GET",
                          url=f"https://{host}/stream-transcription-websocket?{urlencode(query)}")
     credentials = credentials or boto3.Session().get_credentials().get_frozen_credentials()

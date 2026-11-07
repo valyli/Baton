@@ -37,8 +37,18 @@ def test_transcribe_url_is_signed_websocket():
 def test_transcribe_url_adds_configured_vocabulary(monkeypatch):
     monkeypatch.setenv('VOICE_VOCABULARY_NAME', 'baton-terms')
     creds = ReadOnlyCredentials('AKID', 'secret', None)
-    query = parse_qs(urlparse(voice.transcribe_url(credentials=creds, region='us-east-1')).query)
+    query = parse_qs(urlparse(voice.transcribe_url('zh-CN', credentials=creds, region='us-east-1')).query)
     assert query['vocabulary-name'] == ['baton-terms']
+
+
+def test_transcribe_url_auto_identifies_the_language(monkeypatch):
+    monkeypatch.setenv('VOICE_VOCABULARY_NAME', 'baton-terms')
+    creds = ReadOnlyCredentials('AKID', 'secret', None)
+    query = parse_qs(urlparse(voice.transcribe_url('auto', credentials=creds, region='us-east-1')).query)
+    assert query['identify-language'] == ['true']
+    assert query['language-options'] == ['zh-CN,en-US']
+    assert 'language-code' not in query and 'vocabulary-name' not in query
+    assert voice.SttUrlRequest().language == 'auto'
 
 
 def test_speakable_text_drops_code_tables_urls_and_paths():

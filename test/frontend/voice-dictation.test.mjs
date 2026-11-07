@@ -81,7 +81,7 @@ test('hold to talk streams PCM and fills the composer without sending', async (t
   input.value = '前缀 ';
   press('pointerdown');
   await settle();
-  assert.deepEqual(posts, [{ path: '/api/voice/stt-url', body: { language: 'en-US' } }]);
+  assert.deepEqual(posts, [{ path: '/api/voice/stt-url', body: { language: 'auto' } }]);
   assert.equal(input.placeholder, 'Listening…');
   assert.ok(mic.classList.contains('recording'));
   const socket = sockets[0];
@@ -133,6 +133,16 @@ test('a chosen dictation language overrides the device locale', async () => {
   press('pointerdown');
   await settle();
   assert.deepEqual(posts[0].body, { language: 'zh-CN' });
+  press('pointerdown');
+  sockets[0].close();
+});
+
+test('System follows the device locale', async () => {
+  reset();
+  settings = { autoSend: false, language: 'system' };
+  press('pointerdown');
+  await settle();
+  assert.deepEqual(posts[0].body, { language: 'en-US' });
   press('pointerdown');
   sockets[0].close();
 });

@@ -34,6 +34,8 @@ turn completed ─▶ POST /api/voice/speak ─▶ [Bedrock brief] ─▶ Polly 
 ```
 
 - `POST /api/voice/stt-url {language, sampleRate}` returns a Transcribe streaming WebSocket URL
+  (`language: "auto"`, the default, identifies Chinese or English per dictation via
+  `VOICE_AUTO_LANGUAGES`; Settings can pin 中文, English or the phone's language)
   signed with the API Lambda's role, valid for five minutes. Audio goes from the device straight to
   Transcribe; it never passes through the server and is not stored.
 - `POST /api/voice/speak {text, brief, threshold}` strips code blocks, tables, URLs and long paths,
