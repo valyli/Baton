@@ -33,9 +33,15 @@ turn completed ─▶ POST /api/voice/speak ─▶ [Bedrock brief] ─▶ Polly 
 <audio> ◀───────────────────────────────────────────────────────────────┘
 ```
 
+- With automatic language identification Transcribe settles the language once per stream, so
+  the client ends a stream after every finished utterance and continues on a fresh one (URL
+  prefetched, audio queued while it connects); speakers can switch language between sentences.
+  Each stream is billed for at least 15 seconds.
 - `POST /api/voice/stt-url {language, sampleRate}` returns a Transcribe streaming WebSocket URL
   (`language: "auto"`, the default, identifies Chinese or English per dictation via
-  `VOICE_AUTO_LANGUAGES`; Settings can pin 中文, English or the phone's language)
+  `VOICE_AUTO_LANGUAGES`; Settings can pin 中文, English or the phone's language. With Auto, each
+  utterance after a pause starts a fresh Transcribe stream so its language is detected again; a
+  pinned language keeps one stream)
   signed with the API Lambda's role, valid for five minutes. Audio goes from the device straight to
   Transcribe; it never passes through the server and is not stored.
 - `POST /api/voice/speak {text, brief, threshold}` strips code blocks, tables, URLs and long paths,

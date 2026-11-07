@@ -52,6 +52,18 @@ test('transcript collector keeps finals and the live partial', () => {
   assert.equal(collector.apply('{}'), '帮我看一下。然后跑测试。');
 });
 
+test('collector reports when an utterance has settled', () => {
+  const collector = transcriptCollector();
+  const result = (text, partial) => JSON.stringify({ Transcript: { Results: [{ IsPartial: partial, Alternatives: [{ Transcript: text }] }] } });
+  assert.equal(collector.settled(), false);
+  collector.apply(result('先说', true));
+  assert.equal(collector.settled(), false);
+  collector.apply(result('先说中文。', false));
+  assert.equal(collector.settled(), true);
+  collector.apply(result('然后', true));
+  assert.equal(collector.settled(), false);
+});
+
 test('joins Latin segments with a space and Chinese directly', () => {
   assert.equal(joinTranscript('Run the tests.', 'Then deploy.'), 'Run the tests. Then deploy.');
   assert.equal(joinTranscript('先测试。', '再部署。'), '先测试。再部署。');

@@ -104,17 +104,19 @@ export function transcribeLanguage(locale) {
 export function transcriptCollector() {
   let finals = '';
   let partial = '';
+  let settled = false;  // the latest event finished an utterance and nothing new has started
   return {
     apply(body) {
       const results = JSON.parse(body || '{}').Transcript?.Results || [];
       for (const result of results) {
         const text = result.Alternatives?.[0]?.Transcript || '';
-        if (result.IsPartial) partial = text;
-        else { finals = joinTranscript(finals, text); partial = ''; }
+        if (result.IsPartial) { partial = text; settled = false; }
+        else { finals = joinTranscript(finals, text); partial = ''; settled = true; }
       }
       return joinTranscript(finals, partial);
     },
     text: () => joinTranscript(finals, partial),
+    settled: () => settled && !partial,
   };
 }
 

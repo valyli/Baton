@@ -75,13 +75,23 @@ test('the mic shows only in voice mode outside iOS', () => {
   assert.equal(mic.style.display, 'flex');
 });
 
+test('dictation asks for automatic language identification by default', async () => {
+  reset();
+  press('pointerdown');
+  await settle();
+  assert.deepEqual(posts[0], { path: '/api/voice/stt-url', body: { language: 'auto' } });
+  press('pointerdown');
+  sockets[0].close();
+});
+
 test('hold to talk streams PCM and fills the composer without sending', async (t) => {
   reset();
+  settings = { autoSend: false, language: 'zh-CN' };
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   input.value = '前缀 ';
   press('pointerdown');
   await settle();
-  assert.deepEqual(posts, [{ path: '/api/voice/stt-url', body: { language: 'auto' } }]);
+  assert.deepEqual(posts, [{ path: '/api/voice/stt-url', body: { language: 'zh-CN' } }]);
   assert.equal(input.placeholder, 'Listening…');
   assert.ok(mic.classList.contains('recording'));
   const socket = sockets[0];
@@ -109,7 +119,7 @@ test('hold to talk streams PCM and fills the composer without sending', async (t
 
 test('a quick tap keeps listening until the next tap, then can auto-send', async (t) => {
   reset();
-  settings = { autoSend: true };
+  settings = { autoSend: true, language: 'en-US' };
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   press('pointerdown');
   t.mock.timers.tick(100);
@@ -125,6 +135,56 @@ test('a quick tap keeps listening until the next tap, then can auto-send', async
   socket.close();
   t.mock.timers.tick(0);
   assert.deepEqual(sends, ['提交吧。']);
+});
+
+test('auto language starts a fresh stream after each utterance and keeps the order', async (t) => {
+  reset();
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  press('pointerdown');
+  await settle();
+  assert.equal(posts.length, 2, 'first URL plus a spare for the next utterance');
+  const first = sockets[0];
+  first.open();
+  const audio = () => processor.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(4800).fill(0.1) } });
+  audio();
+  assert.equal(first.sent.length, 1);
+  first.result('先说中文', true);
+  first.result('先说中文。', false);
+  await settle();
+  assert.equal(first.sent.at(-1).body, '', 'the finished utterance ends its stream');
+  const second = sockets[1];
+  assert.ok(second, 'next utterance connects with the spare URL');
+  audio();
+  assert.equal(second.sent.length, 0, 'audio waits while the new stream connects');
+  second.open();
+  assert.equal(second.sent.length, 1, 'queued audio is sent once it opens');
+  first.close();
+  second.result('Then English', true);
+  assert.equal(input.value, '先说中文。Then English');
+  t.mock.timers.tick(800);
+  press('pointerup');
+  assert.equal(second.sent.at(-1).body, '');
+  second.result('Then English.', false);
+  second.close();
+  assert.equal(input.value, '先说中文。Then English.');
+  assert.equal(mic.classList.contains('recording'), false);
+});
+
+test('a fixed language keeps one stream across utterances', async (t) => {
+  reset();
+  settings = { autoSend: false, language: 'zh-CN' };
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  press('pointerdown');
+  await settle();
+  sockets[0].open();
+  sockets[0].result('第一句。', false);
+  sockets[0].result('第二句。', false);
+  await settle();
+  assert.equal(sockets.length, 1);
+  assert.equal(posts.length, 1);
+  press('pointerdown');
+  sockets[0].close();
+  assert.equal(input.value, '第一句。第二句。');
 });
 
 test('a chosen dictation language overrides the device locale', async () => {

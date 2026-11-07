@@ -28,7 +28,7 @@
 //                 editing; resets only when the field is cleared.
 import { showToast } from './toast.js';
 import {
-  captureMicrophone, decodeEvent, encodeAudioEvent, transcribeLanguage, transcriptCollector,
+  captureMicrophone, decodeEvent, encodeAudioEvent, joinTranscript, transcribeLanguage, transcriptCollector,
 } from './voice-stream.js';
 
 (function () {
@@ -211,10 +211,19 @@ import {
     lastRecoLen = 0;
   }
 
+  // Each dictation is one or more segments, one Transcribe stream each. With automatic language
+  // identification Transcribe settles the language once per stream, so after every finished
+  // utterance (a pause) the next one starts on a fresh stream; audio captured while it connects
+  // is queued and sent once it opens. A fixed language keeps a single stream.
+  var URL_FRESH_MS = 4 * 60 * 1000;
+
   function startStream() {
     var AudioCtx = window.AudioContext || window.webkitAudioContext;
-    var session = { id: ++gen, context: null, stream: null, socket: null, flush: null,
-      collector: transcriptCollector(), closing: false, autoSend: false, timer: 0 };
+    var chosen = (window.voiceSettings && window.voiceSettings().language) || 'auto';
+    var session = { id: ++gen, context: null, stream: null, flush: null, segments: [], spare: null,
+      language: chosen === 'system' ? transcribeLanguage(lang()) : chosen,
+      closing: false, autoSend: false, timer: 0 };
+    session.rotate = session.language === 'auto';
     live = session;
     beginInsertion(false);
     setRecording(true);
@@ -222,15 +231,21 @@ import {
     session.restorePlaceholder = function () { input().placeholder = placeholder; };
     input().placeholder = 'Listening…';
     try { session.context = new AudioCtx(); } catch (e) { failStream(session, 'Microphone is not available'); return; }
-    var chosen = (window.voiceSettings && window.voiceSettings().language) || 'auto';
-    var language = chosen === 'system' ? transcribeLanguage(lang()) : chosen;
+    var first = newSegment(session);
     Promise.all([
       navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }),
-      window.apiPost('/api/voice/stt-url', { language: language }),
+      fetchUrl(session),
     ]).then(function (results) {
       session.stream = results[0];
-      if (live !== session || session.closing) { releaseAudio(session); return; }
-      openSocket(session, results[1].url);
+      if (session.finished || live !== session) { releaseAudio(session); return; }
+      if (session.rotate) prefetchUrl(session);
+      connectSegment(session, first, results[1]);
+      if (session.closing) return;
+      captureMicrophone(session.context, session.stream, function (chunk) { sendChunk(session, chunk); })
+        .then(function (flush) {
+          session.flush = flush;
+          if (session.closing) releaseAudio(session);
+        }, function () { failStream(session, 'Could not read the microphone'); });
     }, function (error) {
       var denied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
       failStream(session, denied ? 'Microphone permission is off for Baton' : 'Could not start voice input');
@@ -238,17 +253,70 @@ import {
     session.timer = setTimeout(function () { stopStream(session, false); }, MAX_MS);
   }
 
-  function openSocket(session, url) {
+  function fetchUrl(session) {
+    return window.apiPost('/api/voice/stt-url', { language: session.language }).then(function (r) { return r.url; });
+  }
+
+  function prefetchUrl(session) {
+    var promise = fetchUrl(session);
+    promise.catch(noop);
+    session.spare = { promise: promise, at: Date.now() };
+  }
+
+  function takeUrl(session) {
+    var spare = session.spare;
+    prefetchUrl(session);
+    return spare && Date.now() - spare.at < URL_FRESH_MS ? spare.promise.catch(function () { return fetchUrl(session); })
+      : session.spare.promise;
+  }
+
+  function newSegment(session) {
+    var segment = { socket: null, collector: transcriptCollector(), queue: [], open: false, ended: false, closed: false };
+    session.segments.push(segment);
+    return segment;
+  }
+
+  function currentSegment(session) { return session.segments[session.segments.length - 1]; }
+
+  function sessionText(session) {
+    return session.segments.reduce(function (text, segment) { return joinTranscript(text, segment.collector.text()); }, '');
+  }
+
+  function sendChunk(session, chunk) {
+    var segment = currentSegment(session);
+    if (!segment || segment.ended) return;
+    var frame = encodeAudioEvent(chunk);
+    if (segment.open) segment.socket.send(frame);
+    else segment.queue.push(frame);
+  }
+
+  // End of audio: Transcribe sends the last results for this segment, then closes.
+  function endSegment(segment) {
+    segment.ended = true;
+    var socket = segment.socket;
+    if (!segment.open || !socket || socket.readyState !== WebSocket.OPEN) return;  // onopen finishes it
+    socket.send(encodeAudioEvent(new Uint8Array(0)));
+    setTimeout(function () { if (socket.readyState !== WebSocket.CLOSED) socket.close(); }, 4000);
+  }
+
+  function rotateSegment(session) {
+    var previous = currentSegment(session);
+    var next = newSegment(session);
+    endSegment(previous);
+    takeUrl(session).then(function (url) {
+      if (!session.finished) connectSegment(session, next, url);
+    }, function () { failStream(session, 'Voice input connection failed'); });
+  }
+
+  function connectSegment(session, segment, url) {
     var socket = new WebSocket(url);
     socket.binaryType = 'arraybuffer';
-    session.socket = socket;
+    segment.socket = socket;
     socket.onopen = function () {
-      captureMicrophone(session.context, session.stream, function (chunk) {
-        if (socket.readyState === WebSocket.OPEN) socket.send(encodeAudioEvent(chunk));
-      }).then(function (flush) {
-        session.flush = flush;
-        if (session.closing) endAudio(session);
-      }, function () { failStream(session, 'Could not read the microphone'); });
+      segment.open = true;
+      segment.queue.forEach(function (frame) { socket.send(frame); });
+      segment.queue = [];
+      if (segment.ended) endSegment(segment);
     };
     socket.onmessage = function (event) {
       var message;
@@ -258,11 +326,22 @@ import {
         failStream(session, 'Voice input stopped');
         return;
       }
-      if (live !== session && !session.closing) return;
-      onResult(session.collector.apply(message.body), false);
+      if (session.finished) return;
+      segment.collector.apply(message.body);
+      onResult(sessionText(session), false);
+      if (session.rotate && !session.closing && segment === currentSegment(session) && segment.collector.settled()) {
+        rotateSegment(session);
+      }
     };
-    socket.onerror = function () { if (!session.closing) failStream(session, 'Voice input connection failed'); };
-    socket.onclose = function () { finishStream(session); };
+    socket.onerror = function () { if (!session.closing && !segment.ended) failStream(session, 'Voice input connection failed'); };
+    socket.onclose = function () {
+      segment.closed = true;
+      if (session.closing) {
+        if (session.segments.every(function (s) { return s.closed || !s.socket && !s.queue.length; })) finishStream(session);
+      } else if (!segment.ended) {
+        failStream(session, 'Voice input connection lost');
+      }
+    };
   }
 
   function releaseAudio(session) {
@@ -271,25 +350,18 @@ import {
     if (session.context && session.context.state !== 'closed') session.context.close().catch(noop);
   }
 
-  function endAudio(session) {
-    releaseAudio(session);
-    var socket = session.socket;
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(encodeAudioEvent(new Uint8Array(0)));  // end of audio: Transcribe sends the last results, then closes
-      setTimeout(function () { if (socket.readyState !== WebSocket.CLOSED) socket.close(); }, 4000);
-    } else {
-      finishStream(session);
-    }
-  }
-
   function stopStream(session, autoSend) {
     if (!session || session.closing) return;
+    releaseAudio(session);  // flushes the last partial chunk into the current segment
     session.closing = true;
     session.autoSend = !!autoSend;
     clearTimeout(session.timer);
     if (live === session) setRecording(false);
     session.restorePlaceholder();
-    if (session.flush || !session.socket || session.socket.readyState !== WebSocket.CONNECTING) endAudio(session);
+    var segment = currentSegment(session);
+    if (segment) endSegment(segment);
+    if (session.segments.every(function (s) { return s.closed || !s.socket && !s.queue.length; })) finishStream(session);
+    else session.timer = setTimeout(function () { finishStream(session); }, 6000);
   }
 
   function finishStream(session) {
@@ -297,11 +369,14 @@ import {
     session.finished = true;
     clearTimeout(session.timer);
     releaseAudio(session);
+    session.segments.forEach(function (segment) {
+      if (segment.socket && segment.socket.readyState <= WebSocket.OPEN) segment.socket.close();
+    });
     if (live !== session) return;
     live = null;
     setRecording(false);
     session.restorePlaceholder();
-    var text = session.collector.text();
+    var text = sessionText(session);
     if (text) onResult(text, false);
     commitInsertion();
     if (session.autoSend && text && window.voiceSettings && window.voiceSettings().autoSend
@@ -313,7 +388,6 @@ import {
   function failStream(session, message) {
     if (session.finished) return;
     session.closing = true;
-    if (session.socket && session.socket.readyState <= WebSocket.OPEN) session.socket.close();
     finishStream(session);
     if (message) showToast(message);
   }
