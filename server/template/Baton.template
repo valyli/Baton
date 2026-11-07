@@ -11,6 +11,17 @@
       "AllowedValues": ["true", "false"],
       "Description": "Use S3 Transfer Acceleration after it has been enabled on the uploads bucket"
     },
+    "VoiceMode": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": ["true", "false"],
+      "Description": "Voice mode: streaming dictation (Amazon Transcribe) and spoken replies (Amazon Polly, Bedrock briefs)"
+    },
+    "VoiceAutoLanguages": {
+      "Type": "String",
+      "Default": "zh-CN,en-US",
+      "Description": "Languages Transcribe chooses between when dictation is set to Auto (2-5 codes, comma-separated)"
+    },
     "VoiceBriefModelId": {
       "Type": "String",
       "Default": "global.anthropic.claude-haiku-5-5",
@@ -42,6 +53,9 @@
       "Type": "String",
       "Description": "API key name; install.sh --rotate-key picks a new one, which replaces the key"
     }
+  },
+  "Conditions": {
+    "VoiceEnabled": { "Fn::Equals": [{ "Ref": "VoiceMode" }, "true"] }
   },
   "Resources": {
     "LambdaExecutionRole": {
@@ -107,17 +121,21 @@
                   "Resource": { "Fn::Sub": "arn:aws:s3:::${ImagesBucketName}/*" }
                 },
                 {
-                  "Effect": "Allow",
-                  "Action": ["polly:SynthesizeSpeech", "transcribe:StartStreamTranscriptionWebSocket"],
-                  "Resource": "*"
+                  "Fn::If": ["VoiceEnabled", {
+                    "Effect": "Allow",
+                    "Action": ["polly:SynthesizeSpeech", "transcribe:StartStreamTranscriptionWebSocket"],
+                    "Resource": "*"
+                  }, { "Ref": "AWS::NoValue" }]
                 },
                 {
-                  "Effect": "Allow",
-                  "Action": "bedrock:InvokeModel",
-                  "Resource": [
-                    { "Fn::Sub": "arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*" },
-                    "arn:aws:bedrock:*::foundation-model/*"
-                  ]
+                  "Fn::If": ["VoiceEnabled", {
+                    "Effect": "Allow",
+                    "Action": "bedrock:InvokeModel",
+                    "Resource": [
+                      { "Fn::Sub": "arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*" },
+                      "arn:aws:bedrock:*::foundation-model/*"
+                    ]
+                  }, { "Ref": "AWS::NoValue" }]
                 }
               ]
             }
@@ -144,6 +162,8 @@
             "APP_VERSION": { "Ref": "AppVersion" },
             "API_KEY_NAME": { "Ref": "ApiKeyName" },
             "ACCOUNT_ID": { "Ref": "AccountId" },
+            "VOICE_ENABLED": { "Ref": "VoiceMode" },
+            "VOICE_AUTO_LANGUAGES": { "Ref": "VoiceAutoLanguages" },
             "VOICE_BRIEF_MODEL_ID": { "Ref": "VoiceBriefModelId" }
           }
         },

@@ -32,6 +32,15 @@ VOICES = {"zh": "Zhiyu", "en": "Joanna"}
 CACHE_VERSION = "1"
 
 
+def voice_enabled():
+    return os.environ.get("VOICE_ENABLED", "false") == "true"
+
+
+def _require_enabled():
+    if not voice_enabled():
+        raise HTTPException(404, "Voice mode is not enabled on this server")
+
+
 def _region():
     return os.environ.get("AWS_REGION", "us-east-1")
 
@@ -79,7 +88,7 @@ def transcribe_url(language="auto", sample_rate=16000, credentials=None, region=
     }
     if language == "auto":
         query["identify-language"] = "true"
-        query["language-options"] = os.environ.get("VOICE_AUTO_LANGUAGES", "zh-CN,en-US")
+        query["language-options"] = os.environ.get("VOICE_AUTO_LANGUAGES") or "zh-CN,en-US"
     else:
         query["language-code"] = language
         vocabulary = os.environ.get("VOICE_VOCABULARY_NAME", "")
@@ -92,8 +101,14 @@ def transcribe_url(language="auto", sample_rate=16000, credentials=None, region=
     return "wss://" + request.url[len("https://"):]
 
 
+@router.get("/config")
+def config():
+    return {"enabled": voice_enabled()}
+
+
 @router.post("/stt-url")
 def stt_url(body: SttUrlRequest):
+    _require_enabled()
     return {"url": transcribe_url(body.language, body.sampleRate),
             "sampleRate": body.sampleRate, "expiresIn": STT_URL_TTL}
 
@@ -251,6 +266,7 @@ def _cached(key):
 
 @router.post("/speak")
 def speak(body: SpeakRequest, request: Request):
+    _require_enabled()
     account = api_key.account_id(request.headers.get("x-api-key", ""))
     plain = speakable_text(body.text)
     if not plain:

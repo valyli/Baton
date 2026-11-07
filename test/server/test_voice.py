@@ -13,6 +13,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'server',
 import voice
 
 REQUEST = SimpleNamespace(headers={'x-api-key': 'test-key'})
+
+
+@pytest.fixture(autouse=True)
+def voice_on(monkeypatch):
+    monkeypatch.setenv('VOICE_ENABLED', 'true')
 LONG_REPLY = '## 结果\n' + '已经完成语音功能的服务端部分，测试全部通过。' * 30 + '\n```js\nconsole.log(1)\n```\n'
 
 
@@ -187,6 +192,25 @@ def test_speak_rejects_code_only_reply(clients):
     with pytest.raises(HTTPException) as error:
         voice.speak(voice.SpeakRequest(text='```\ncode\n```'), REQUEST)
     assert error.value.status_code == 422
+
+
+def test_voice_is_off_unless_the_stack_enables_it(monkeypatch):
+    monkeypatch.delenv('VOICE_ENABLED')
+    assert voice.config() == {'enabled': False}
+    for call in (lambda: voice.stt_url(voice.SttUrlRequest()),
+                 lambda: voice.speak(voice.SpeakRequest(text='hi'), REQUEST)):
+        with pytest.raises(HTTPException) as error:
+            call()
+        assert error.value.status_code == 404
+    monkeypatch.setenv('VOICE_ENABLED', 'true')
+    assert voice.config() == {'enabled': True}
+
+
+def test_auto_languages_follow_the_stack_parameter(monkeypatch):
+    monkeypatch.setenv('VOICE_AUTO_LANGUAGES', 'en-US,ja-JP')
+    creds = ReadOnlyCredentials('AKID', 'secret', None)
+    query = parse_qs(urlparse(voice.transcribe_url('auto', credentials=creds, region='us-east-1')).query)
+    assert query['language-options'] == ['en-US,ja-JP']
 
 
 def test_cache_keys_are_scoped_by_account_and_mode():

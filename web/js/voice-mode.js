@@ -42,9 +42,45 @@ function saveSessionVoice(sessionId, patch) {
   return next;
 }
 
+// The server answers /api/voice/config only when voice mode is deployed (VoiceMode=true); older
+// or voice-off stacks hide every voice control. The last answer is cached per server.
+const AVAILABLE_KEY = 'baton-voice-available';
+let available = null;
+
+export function voiceAvailable() {
+  if (available === null) {
+    try { available = JSON.parse(localStorage.getItem(AVAILABLE_KEY) || '{}')[state.SERVER] === true; } catch { available = false; }
+  }
+  return available;
+}
+
+export async function refreshVoiceAvailability(fetchImpl = globalThis.fetch) {
+  let next = false;
+  try {
+    if (state.SERVER && state.KEY) {
+      const response = await fetchImpl(state.SERVER + '/api/voice/config', { headers: { 'x-api-key': state.KEY } });
+      next = response.ok && (await response.json()).enabled === true;
+    }
+  } catch { next = false; }
+  const changed = next !== voiceAvailable();
+  available = next;
+  try {
+    const cache = JSON.parse(localStorage.getItem(AVAILABLE_KEY) || '{}');
+    cache[state.SERVER] = next;
+    localStorage.setItem(AVAILABLE_KEY, JSON.stringify(cache));
+  } catch {}
+  if (changed) {
+    if (!next) { window.stopDictation?.(); stopVoicePlayback(); }
+    window.updateBreadcrumb?.();
+    window.updateMicButton?.();
+    renderVoiceBar();
+  }
+  return next;
+}
+
 export function voiceModeActive() {
   const sessionId = currentVoiceSessionId();
-  return !!sessionId && sessionVoice(sessionId).on;
+  return !!sessionId && voiceAvailable() && sessionVoice(sessionId).on;
 }
 
 const HEADPHONES_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z"/></svg>';
@@ -52,6 +88,7 @@ const PLAY_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentC
 const STOP_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>';
 
 export function voiceModeControl() {
+  if (!voiceAvailable()) return '';
   const on = voiceModeActive();
   const label = on ? 'Voice mode on: tap for text mode' : 'Text mode: tap for voice mode';
   return '<button class="project-files-entry voice-mode-toggle' + (on ? ' on' : '') + '" type="button" aria-pressed="' + on + '"'
@@ -222,7 +259,7 @@ window.refreshVoiceUi = function () {
 
 window.toggleVoiceMode = function () {
   const sessionId = currentVoiceSessionId();
-  if (!sessionId) return;
+  if (!sessionId || !voiceAvailable()) return;
   const next = saveSessionVoice(sessionId, { on: !sessionVoice(sessionId).on });
   if (!next.on) { window.stopDictation?.(); stopVoicePlayback(); pending = null; }
   else if (!sessionStorage.getItem('baton-voice-hint')) {
@@ -250,6 +287,12 @@ window.voiceSettings = voiceSettings;
 
 export function mountVoiceSettings(root = document.getElementById('voiceSettings')) {
   if (!root) return;
+  if (!voiceAvailable()) {
+    refreshVoiceAvailability().then(on => { if (on) mountVoiceSettings(root); });
+    return;
+  }
+  if (root.dataset.mounted) return;
+  root.dataset.mounted = '1';
   const settings = voiceSettings();
   const bind = (id, key) => {
     const input = root.querySelector('#' + id);
@@ -277,3 +320,5 @@ export function mountVoiceSettings(root = document.getElementById('voiceSettings
   }
   root.hidden = false;
 }
+
+if (typeof document !== 'undefined' && !globalThis.__VOICE_NO_AUTO_REFRESH__) void refreshVoiceAvailability();

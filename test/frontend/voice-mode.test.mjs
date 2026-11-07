@@ -15,6 +15,7 @@ Object.assign(globalThis, {
   window, document: window.document, localStorage: window.localStorage, sessionStorage: window.sessionStorage,
 });
 
+globalThis.__VOICE_NO_AUTO_REFRESH__ = true;
 const { state } = await import('../../web/js/state.js');
 const voice = await import('../../web/js/voice-mode.js');
 
@@ -33,8 +34,17 @@ window.apiPost = async (path, body) => {
   return { url: 'https://audio/' + posts.length, mode: body.text.length > body.threshold && body.brief ? 'brief' : 'original' };
 };
 
-function reset(session = 'session-a') {
+const configFetch = enabled => async (url, init) => {
+  configCalls.push({ url, key: init.headers['x-api-key'] });
+  return { ok: true, json: async () => ({ enabled }) };
+};
+const configCalls = [];
+
+async function reset(session = 'session-a', { enabled = true } = {}) {
   localStorage.clear();
+  state.SERVER = 'https://baton.test/v1';
+  state.KEY = 'k';
+  await voice.refreshVoiceAvailability(configFetch(enabled));
   sessionStorage.clear();
   posts.length = 0;
   played.length = 0;
@@ -60,16 +70,35 @@ async function endTurn(t) {
   for (let i = 0; i < 3; i++) { t.mock.timers.tick(400); await settle(); }
 }
 
-test('sessions start in text mode with no voice bar', () => {
-  reset();
+test('a stack without voice mode shows no voice controls', async () => {
+  await reset('session-a', { enabled: false });
+  assert.deepEqual(configCalls.at(-1), { url: 'https://baton.test/v1/api/voice/config', key: 'k' });
+  localStorage.setItem('baton-voice:session-a', JSON.stringify({ on: true, brief: true }));
+  assert.equal(voice.voiceAvailable(), false);
+  assert.equal(voice.voiceModeControl(), '');
+  assert.equal(voice.voiceModeActive(), false);
+  window.toggleVoiceMode();
+  assert.equal(JSON.parse(localStorage.getItem('baton-voice:session-a')).on, true, 'toggle is a no-op');
+  const root = document.getElementById('voiceSettings');
+  root.hidden = true;
+  voice.mountVoiceSettings(root);
+  assert.equal(root.hidden, true);
+  assert.equal(await voice.refreshVoiceAvailability(async () => { throw new Error('offline'); }), false);
+  assert.equal(await voice.refreshVoiceAvailability(async () => ({ ok: false, status: 404 })), false);
+  assert.equal(await voice.refreshVoiceAvailability(configFetch(true)), true);
+  assert.match(voice.voiceModeControl(), /voice-mode-toggle/);
+});
+
+test('sessions start in text mode with no voice bar', async () => {
+  await reset();
   assert.equal(voice.voiceModeActive(), false);
   assert.match(voice.voiceModeControl(), /aria-pressed="false"/);
   window.refreshVoiceUi();
-  assert.equal(document.getElementById('voice-bar'), null);
+  assert.ok(document.getElementById('voice-bar')?.hidden ?? true);
 });
 
-test('voice mode is remembered per Session', () => {
-  reset();
+test('voice mode is remembered per Session', async () => {
+  await reset();
   window.toggleVoiceMode();
   assert.equal(voice.voiceModeActive(), true);
   assert.equal(document.getElementById('voice-bar').hidden, false);
@@ -84,14 +113,14 @@ test('voice mode is remembered per Session', () => {
   assert.equal(localStorage.getItem('baton-voice:session-a'), null);
 });
 
-test('the New Session view never enters voice mode', () => {
-  reset('__new__');
+test('the New Session view never enters voice mode', async () => {
+  await reset('__new__');
   window.toggleVoiceMode();
   assert.equal(voice.voiceModeActive(), false);
 });
 
-test('brief follows Settings for new Sessions and the chip per Session', () => {
-  reset();
+test('brief follows Settings for new Sessions and the chip per Session', async () => {
+  await reset();
   voice.saveVoiceSettings({ brief: false });
   assert.equal(voice.sessionVoice().brief, false);
   window.toggleVoiceMode();
@@ -100,8 +129,8 @@ test('brief follows Settings for new Sessions and the chip per Session', () => {
   assert.equal(voice.sessionVoice('other').brief, false);
 });
 
-test('latest reply is the last text of the latest completed turn', () => {
-  reset();
+test('latest reply is the last text of the latest completed turn', async () => {
+  await reset();
   reply('全部测试通过。');
   assert.equal(voice.latestReplyText(), '全部测试通过。');
   reply('还在输出', { preview: true });
@@ -111,7 +140,7 @@ test('latest reply is the last text of the latest completed turn', () => {
 });
 
 test('a finished turn is read once in voice mode', async (t) => {
-  reset();
+  await reset();
   t.mock.timers.enable({ apis: ['setTimeout'] });
   window.toggleVoiceMode();
   reply('全部测试通过。');
@@ -124,7 +153,7 @@ test('a finished turn is read once in voice mode', async (t) => {
 });
 
 test('text mode and auto-read off stay silent', async (t) => {
-  reset();
+  await reset();
   t.mock.timers.enable({ apis: ['setTimeout'] });
   reply('完成。');
   await endTurn(t);
@@ -135,7 +164,7 @@ test('text mode and auto-read off stay silent', async (t) => {
 });
 
 test('a reply that ends while hidden plays on return', async (t) => {
-  reset();
+  await reset();
   t.mock.timers.enable({ apis: ['setTimeout'] });
   window.toggleVoiceMode();
   reply('后台完成。');
@@ -149,7 +178,7 @@ test('a reply that ends while hidden plays on return', async (t) => {
 });
 
 test('the voice bar replays the latest reply and leaving voice mode stops it', async () => {
-  reset();
+  await reset();
   window.toggleVoiceMode();
   reply('再读一遍。');
   window.refreshVoiceUi();
@@ -161,8 +190,8 @@ test('the voice bar replays the latest reply and leaving voice mode stops it', a
   assert.equal(document.getElementById('voice-bar').hidden, true);
 });
 
-test('Settings switches persist voice preferences', () => {
-  reset();
+test('Settings switches persist voice preferences', async () => {
+  await reset();
   voice.mountVoiceSettings();
   const root = document.getElementById('voiceSettings');
   assert.equal(root.hidden, false);

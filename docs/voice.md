@@ -4,6 +4,21 @@ Voice mode is an opt-in, per-Session layer over the normal text workflow. Messag
 what Claude Code or Codex receive stay text; voice only helps the user enter text and listen to
 replies. Every Session starts in text mode and looks exactly as before.
 
+## Enabling it
+
+Voice mode is off unless the stack turns it on, so a deployment gains no Transcribe, Polly or
+Bedrock permissions by default:
+
+```bash
+BATON_VOICE=true ./server/install.sh --region <region> --stack <stack>
+```
+
+The choice is kept on later deploys (`BATON_VOICE=false` turns it off). `BATON_VOICE_LANGUAGES`
+(stack parameter `VoiceAutoLanguages`, default `zh-CN,en-US`) sets the languages Auto dictation
+chooses between; `VoiceBriefModelId` sets the brief model. The app asks `GET /api/voice/config`
+and shows no voice controls when the stack has voice off or predates it. The region needs Amazon
+Transcribe streaming, Polly neural voices and the brief model in Bedrock.
+
 ## Using it
 
 - The headphones button in a Session's toolbar switches that Session between text and voice
